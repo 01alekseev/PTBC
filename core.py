@@ -27,45 +27,58 @@ class PetoronTimeBurnCipher:
         return key_material[:self.KEY_SIZE], key_material[self.KEY_SIZE:]
 
     def encrypt(self, plaintext: bytes, ttl_seconds: int) -> bytes:
-        expiry_time = int(time.time()) + ttl_seconds
+        now_time = time.time()
+        now_monotonic = time.monotonic()
+        offset = now_monotonic - now_time
+        expiry_time = int(now_time + ttl_seconds)
+
         salt = os.urandom(self.SALT_SIZE)
         enc_key, hmac_key = self._derive_keys(salt)
         iv = os.urandom(16)
         cipher = AES.new(enc_key, AES.MODE_CFB, iv)
         ciphertext = cipher.encrypt(plaintext)
 
-        body = self.SIGNATURE + expiry_time.to_bytes(8, 'big') + salt + iv + ciphertext
+        body = (
+            self.SIGNATURE +
+            expiry_time.to_bytes(8, 'big') +
+            int(offset * 1000).to_bytes(8, 'big') +
+            salt +
+            iv +
+            ciphertext
+        )
         tag = hmac.new(hmac_key, body, SHA512).digest()
         return body + tag
 
     def decrypt(self, encrypted_data: bytes) -> bytes:
         if not encrypted_data.startswith(self.SIGNATURE):
             raise ValueError("Invalid signature")
-        if len(encrypted_data) < 44 + self.HMAC_SIZE:
+        if len(encrypted_data) < 52 + self.HMAC_SIZE:
             raise ValueError("Corrupted or incomplete data")
 
         body = encrypted_data[:-self.HMAC_SIZE]
         received_hmac = encrypted_data[-self.HMAC_SIZE:]
 
         expiry_time = int.from_bytes(encrypted_data[4:12], 'big')
-        if time.time() > expiry_time:
-            raise ValueError("Expired")
+        offset_ms = int.from_bytes(encrypted_data[12:20], 'big')
+        offset = offset_ms / 1000.0
 
-        salt = encrypted_data[12:28]
-        iv = encrypted_data[28:44]
-        ciphertext = encrypted_data[44:-self.HMAC_SIZE]
+        salt = encrypted_data[20:36]
+        iv = encrypted_data[36:52]
+        ciphertext = encrypted_data[52:-self.HMAC_SIZE]
 
         enc_key, hmac_key = self._derive_keys(salt)
         calc_hmac = hmac.new(hmac_key, body, SHA512).digest()
-
         if not hmac.compare_digest(calc_hmac, received_hmac):
             raise ValueError("HMAC verification failed")
+
+        monotonic_now = time.monotonic()
+        estimated_time = monotonic_now - offset
+
+        if estimated_time > expiry_time:
+            raise ValueError("Expired")
 
         cipher = AES.new(enc_key, AES.MODE_CFB, iv)
         return cipher.decrypt(ciphertext)
 
     def destroy(self):
         self.password = b''
-
-
-
