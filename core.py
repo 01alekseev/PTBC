@@ -30,6 +30,10 @@ class PetoronTimeBurnCipher:
         now_time = time.time()
         now_monotonic = time.monotonic()
         offset = now_monotonic - now_time
+
+        if offset < 0:
+            offset = 0
+
         expiry_time = int(now_time + ttl_seconds)
 
         salt = os.urandom(self.SALT_SIZE)
